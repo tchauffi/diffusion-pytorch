@@ -1,6 +1,62 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
+from einops import rearrange
+
+
+class SinusoidalEmbeddings(nn.Module):
+    """
+    This module generates sinusoidal embeddings for the input tensor.
+    """
+
+    def __init__(self, time_steps: int, embed_dim: int):
+        super().__init__()
+        position = torch.arange(time_steps).unsqueeze(1).float()
+        div = torch.exp(
+            torch.arange(0, embed_dim, 2).float() * -(math.log(10000.0) / embed_dim)
+        )
+        embeddings = torch.zeros(time_steps, embed_dim, requires_grad=False)
+        embeddings[:, 0::2] = torch.sin(position * div)
+        embeddings[:, 1::2] = torch.cos(position * div)
+        self.embeddings = embeddings
+
+    def forward(self, x, t):
+        """
+        Forward pass of the sinusoidal embeddings module.
+        """
+        with torch.no_grad():
+            embeds = self.embeddings[t].to(x.device)
+        return embeds[:, :, None, None]
+
+
+class Attention(nn.Module):
+    """
+    This module performs multi-head scaled dot-product attention.
+    """
+
+    def __init__(self, C: int, num_heads: int, dropout_prob: float):
+        super().__init__()
+        self.proj1 = nn.Linear(C, C * 3)
+        self.proj2 = nn.Linear(C, C)
+        self.num_heads = num_heads
+        self.dropout_prob = dropout_prob
+
+    def forward(self, x):
+        """
+        Forward pass of the attention module.
+        """
+        h, w = x.shape[2:]
+        x = rearrange(x, "b c h w -> b (h w) c")
+        x = self.proj1(x)
+        x = rearrange(x, "b L (C H K) -> K b H L C", K=3, H=self.num_heads)
+        q, k, v = x[0], x[1], x[2]
+        x = F.scaled_dot_product_attention(
+            q, k, v, is_causal=False, dropout_p=self.dropout_prob
+        )
+        x = rearrange(x, "b H (h w) C -> b h w (C H)", h=h, w=w)
+        x = self.proj2(x)
+        return rearrange(x, "b h w C -> b C h w")
 
 
 class ResidualConvBlock(nn.Module):
@@ -157,11 +213,13 @@ class UNet(nn.Module):
 
     def __init__(self, in_channels, out_channels, num_filters=32):
         super(UNet, self).__init__()
-        self.down1 = DownBlock(in_channels, num_filters)
+        self.entry_conv = nn.Conv2d(in_channels, num_filters, 3, 1, 1)
+        self.down1 = DownBlock(num_filters, num_filters)
         self.down2 = DownBlock(num_filters, num_filters * 2)
         self.down3 = DownBlock(num_filters * 2, num_filters * 4)
         self.down4 = DownBlock(num_filters * 4, num_filters * 8)
-        self.center = ResidualConvBlock(num_filters * 8, num_filters * 16)
+        self.bottleneck1 = ResidualConvBlock(num_filters * 8, num_filters * 16)
+        self.bottleneck2 = ResidualConvBlock(num_filters * 16, num_filters * 16)
         self.up4 = UpBlock(num_filters * 16 + num_filters * 8, num_filters * 8)
         self.up3 = UpBlock(num_filters * 8 + num_filters * 4, num_filters * 4)
         self.up2 = UpBlock(num_filters * 4 + num_filters * 2, num_filters * 2)
@@ -169,12 +227,18 @@ class UNet(nn.Module):
         self.out = nn.Conv2d(num_filters, out_channels, 1)
         self.sigmoid = nn.Sigmoid()
 
-    def forward(self, x):
+        self.time_embedder = SinusoidalEmbeddings(1000, 32)
+
+    def forward(self, x, t):
+        x = self.entry_conv(x)
+        embeds = self.time_embedder(x, t)
+        x = x + embeds
         x, skip1 = self.down1(x)
         x, skip2 = self.down2(x)
         x, skip3 = self.down3(x)
         x, skip4 = self.down4(x)
-        x = self.center(x)
+        x = self.bottleneck1(x)
+        x = self.bottleneck2(x)
         x = self.up4(x, skip4)
         x = self.up3(x, skip3)
         x = self.up2(x, skip2)
