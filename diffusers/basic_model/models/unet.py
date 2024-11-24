@@ -93,11 +93,9 @@ class ResidualConvBlock(nn.Module):
         kernel_size=3,
         stride=1,
         padding=1,
-        attention=False,
     ):
         super(ResidualConvBlock, self).__init__()
         self.pre_conv = in_channels != out_channels
-        self.attention = attention
         if self.pre_conv:
             self.conv0 = nn.Conv2d(
                 in_channels, out_channels, kernel_size=1, stride=1, padding=0
@@ -107,11 +105,9 @@ class ResidualConvBlock(nn.Module):
         self.bn1 = nn.BatchNorm2d(out_channels)
         self.bn2 = nn.BatchNorm2d(out_channels)
         self.silu = F.silu
+        self.dropout = nn.Dropout(0.1)
 
-        if attention:
-            self.attention = Attention(out_channels, num_heads=8, dropout_prob=0.1)
-
-    def forward(self, x):
+    def forward(self, x, embeddings):
         """Forward pass of the ResNet block.
         This function performs the forward pass through a ResNet block with two convolutional layers,
         batch normalization, and skip connection (residual connection).
@@ -126,18 +122,18 @@ class ResidualConvBlock(nn.Module):
         """
         if self.pre_conv:
             x = self.conv0(x)
-        residual = x
+        x = x + embeddings[:, : x.shape[1], :, :]
+
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.silu(out)
 
-        if self.attention:
-            out = self.attention(out)
+        out = self.dropout(out)
 
         out = self.conv2(out)
         out = self.bn2(out)
-        out += residual
         out = self.silu(out)
+        out += x
         return out
 
 
@@ -161,11 +157,17 @@ class DownBlock(nn.Module):
 
     def __init__(self, in_channels, out_channels, attention=False):
         super(DownBlock, self).__init__()
-        self.conv = ResidualConvBlock(in_channels, out_channels, attention=attention)
+        self.conv1 = ResidualConvBlock(in_channels, out_channels)
+        self.conv2 = ResidualConvBlock(out_channels, out_channels)
         self.downsample = nn.MaxPool2d(2)
+        if attention:
+            self.attention = Attention(out_channels, num_heads=8, dropout_prob=0.1)
 
-    def forward(self, x):
-        skip = self.conv(x)
+    def forward(self, x, embeddings):
+        x = self.conv1(x, embeddings)
+        if hasattr(self, "attention"):
+            x = self.attention(x)
+        skip = self.conv2(x, embeddings)
         x = self.downsample(skip)
         return x, skip
 
@@ -194,12 +196,19 @@ class UpBlock(nn.Module):
         self.upsample = nn.Upsample(
             scale_factor=2, mode="bilinear", align_corners=False
         )
-        self.conv = ResidualConvBlock(in_channels, out_channels, attention=attention)
+        self.conv1 = ResidualConvBlock(in_channels, out_channels)
+        self.conv2 = ResidualConvBlock(out_channels, out_channels)
+        self.out_channels = out_channels
+        if attention:
+            self.attention = Attention(out_channels, num_heads=8, dropout_prob=0.1)
 
-    def forward(self, x, skip):
+    def forward(self, x, skip, embeddings):
         x = self.upsample(x)
         x = torch.cat([x, skip], dim=1)
-        x = self.conv(x)
+        x = self.conv1(x, embeddings)
+        if hasattr(self, "attention"):
+            x = self.attention(x)
+        x = self.conv2(x, embeddings)
         return x
 
 
@@ -224,10 +233,14 @@ class UNet(nn.Module):
     Note:
         The spatial dimensions of the input must be divisible by 16 due to the four
         downsampling operations in the network.
+
+    # TODO : make the unet more flexible to parameter
     """
 
     def __init__(self, in_channels, out_channels, num_filters=32):
         super(UNet, self).__init__()
+
+        max_filters_nbr = num_filters * 8 + num_filters * 4
         self.entry_conv = nn.Conv2d(in_channels, num_filters, 3, 1, 1)
         self.down1 = DownBlock(num_filters, num_filters)
         self.down2 = DownBlock(num_filters, num_filters * 2, attention=True)
@@ -242,20 +255,19 @@ class UNet(nn.Module):
         self.out = nn.Conv2d(num_filters, out_channels, 1)
         self.sigmoid = nn.Sigmoid()
 
-        self.time_embedder = SinusoidalEmbeddings(1000, 32)
+        self.time_embedder = SinusoidalEmbeddings(1000, max_filters_nbr)
 
     def forward(self, x, t):
         x = self.entry_conv(x)
         embeds = self.time_embedder(x, t)
-        x = x + embeds
-        x, skip1 = self.down1(x)
-        x, skip2 = self.down2(x)
-        x, skip3 = self.down3(x)
-        x = self.bottleneck1(x)
-        x = self.bottleneck2(x)
-        x = self.up3(x, skip3)
-        x = self.up2(x, skip2)
-        x = self.up1(x, skip1)
+        x, skip1 = self.down1(x, embeds)
+        x, skip2 = self.down2(x, embeds)
+        x, skip3 = self.down3(x, embeds)
+        x = self.bottleneck1(x, embeds)
+        x = self.bottleneck2(x, embeds)
+        x = self.up3(x, skip3, embeds)
+        x = self.up2(x, skip2, embeds)
+        x = self.up1(x, skip1, embeds)
         x = self.out(x)
         x = self.sigmoid(x)
         return x
