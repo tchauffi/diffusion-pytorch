@@ -19,6 +19,7 @@ matplotlib = "^3.9.2"
 seaborn = "^0.13.2"
 requests = "^2.32.3"
 datasets = "^3.1.0"
+einops = "^0.8.0"
 
 [tool.poetry.group.dev.dependencies]
 flake8 = "^7.1.1"
