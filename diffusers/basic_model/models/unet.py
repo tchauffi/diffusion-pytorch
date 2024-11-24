@@ -86,9 +86,18 @@ class ResidualConvBlock(nn.Module):
                               batch normalization, and SiLU activation.
     """
 
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size=3,
+        stride=1,
+        padding=1,
+        attention=False,
+    ):
         super(ResidualConvBlock, self).__init__()
         self.pre_conv = in_channels != out_channels
+        self.attention = attention
         if self.pre_conv:
             self.conv0 = nn.Conv2d(
                 in_channels, out_channels, kernel_size=1, stride=1, padding=0
@@ -98,6 +107,9 @@ class ResidualConvBlock(nn.Module):
         self.bn1 = nn.BatchNorm2d(out_channels)
         self.bn2 = nn.BatchNorm2d(out_channels)
         self.silu = F.silu
+
+        if attention:
+            self.attention = Attention(out_channels, num_heads=8, dropout_prob=0.1)
 
     def forward(self, x):
         """Forward pass of the ResNet block.
@@ -118,6 +130,9 @@ class ResidualConvBlock(nn.Module):
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.silu(out)
+
+        if self.attention:
+            out = self.attention(out)
 
         out = self.conv2(out)
         out = self.bn2(out)
@@ -144,9 +159,9 @@ class DownBlock(nn.Module):
             - torch.Tensor: Skip connection for corresponding up block
     """
 
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, attention=False):
         super(DownBlock, self).__init__()
-        self.conv = ResidualConvBlock(in_channels, out_channels)
+        self.conv = ResidualConvBlock(in_channels, out_channels, attention=attention)
         self.downsample = nn.MaxPool2d(2)
 
     def forward(self, x):
@@ -174,12 +189,12 @@ class UpBlock(nn.Module):
         torch.Tensor: Processed tensor after upsampling, concatenation and convolution.
     """
 
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, attention=False):
         super(UpBlock, self).__init__()
         self.upsample = nn.Upsample(
             scale_factor=2, mode="bilinear", align_corners=False
         )
-        self.conv = ResidualConvBlock(in_channels, out_channels)
+        self.conv = ResidualConvBlock(in_channels, out_channels, attention=attention)
 
     def forward(self, x, skip):
         x = self.upsample(x)
@@ -215,14 +230,14 @@ class UNet(nn.Module):
         super(UNet, self).__init__()
         self.entry_conv = nn.Conv2d(in_channels, num_filters, 3, 1, 1)
         self.down1 = DownBlock(num_filters, num_filters)
-        self.down2 = DownBlock(num_filters, num_filters * 2)
+        self.down2 = DownBlock(num_filters, num_filters * 2, attention=True)
         self.down3 = DownBlock(num_filters * 2, num_filters * 4)
-        self.down4 = DownBlock(num_filters * 4, num_filters * 8)
-        self.bottleneck1 = ResidualConvBlock(num_filters * 8, num_filters * 16)
-        self.bottleneck2 = ResidualConvBlock(num_filters * 16, num_filters * 16)
-        self.up4 = UpBlock(num_filters * 16 + num_filters * 8, num_filters * 8)
+        self.bottleneck1 = ResidualConvBlock(num_filters * 4, num_filters * 8)
+        self.bottleneck2 = ResidualConvBlock(num_filters * 8, num_filters * 8)
         self.up3 = UpBlock(num_filters * 8 + num_filters * 4, num_filters * 4)
-        self.up2 = UpBlock(num_filters * 4 + num_filters * 2, num_filters * 2)
+        self.up2 = UpBlock(
+            num_filters * 4 + num_filters * 2, num_filters * 2, attention=True
+        )
         self.up1 = UpBlock(num_filters * 2 + num_filters, num_filters)
         self.out = nn.Conv2d(num_filters, out_channels, 1)
         self.sigmoid = nn.Sigmoid()
@@ -236,10 +251,8 @@ class UNet(nn.Module):
         x, skip1 = self.down1(x)
         x, skip2 = self.down2(x)
         x, skip3 = self.down3(x)
-        x, skip4 = self.down4(x)
         x = self.bottleneck1(x)
         x = self.bottleneck2(x)
-        x = self.up4(x, skip4)
         x = self.up3(x, skip3)
         x = self.up2(x, skip2)
         x = self.up1(x, skip1)
