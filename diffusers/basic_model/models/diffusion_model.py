@@ -50,7 +50,7 @@ class DiffusionModel(pl.LightningModule):
         num_images = initial_noises.shape[0]
         current_images = initial_noises
         steps = torch.arange(0, diffusion_steps, device=self.device)
-        alphas, betas = offset_cosine_diffusion_scheduler(steps)
+        alphas, betas = offset_cosine_diffusion_scheduler(steps / diffusion_steps)
 
         for step in tqdm(reversed(steps), desc="Reversing Diffusion"):
             alpha = alphas[step].repeat(num_images).reshape(num_images, 1, 1, 1)
