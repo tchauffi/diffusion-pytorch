@@ -1,33 +1,26 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
 from einops import rearrange
 
 
-class SinusoidalEmbeddings(nn.Module):
+def timestep_embedding(timesteps, dim, max_period=10000):
     """
-    This module generates sinusoidal embeddings for the input tensor.
+    Generate sinusoidal embeddings for the given timesteps.
     """
-
-    def __init__(self, time_steps: int, embed_dim: int):
-        super().__init__()
-        position = torch.arange(time_steps).unsqueeze(1).float()
-        div = torch.exp(
-            torch.arange(0, embed_dim, 2).float() * -(math.log(10000.0) / embed_dim)
+    half_dim = dim // 2
+    frequencies = torch.exp(
+        -torch.log(torch.tensor(max_period, dtype=torch.float32))
+        * torch.arange(start=0, end=half_dim, dtype=torch.float32)
+        / half_dim
+    ).to(timesteps.device)
+    args = timesteps[:, None].float() * frequencies[None]
+    embeddings = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
+    if dim % 2:
+        embeddings = torch.cat(
+            [embeddings, torch.zeros_like(embeddings[:, :1])], dim=-1
         )
-        embeddings = torch.zeros(time_steps, embed_dim, requires_grad=False)
-        embeddings[:, 0::2] = torch.sin(position * div)
-        embeddings[:, 1::2] = torch.cos(position * div)
-        self.embeddings = embeddings
-
-    def forward(self, x, t):
-        """
-        Forward pass of the sinusoidal embeddings module.
-        """
-        with torch.no_grad():
-            embeds = self.embeddings[t].to(x.device)
-        return embeds[:, :, None, None]
+    return embeddings
 
 
 class Attention(nn.Module):
@@ -102,8 +95,8 @@ class ResidualConvBlock(nn.Module):
             )
         self.conv1 = nn.Conv2d(out_channels, out_channels, kernel_size, stride, padding)
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size, stride, padding)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.bn1 = nn.GroupNorm(32, out_channels)
+        self.bn2 = nn.GroupNorm(32, out_channels)
         self.silu = F.silu
         self.dropout = nn.Dropout(0.1)
 
@@ -120,8 +113,10 @@ class ResidualConvBlock(nn.Module):
             The residual connection allows the network to learn residual functions with reference
             to the input layer, helping with the training of very deep networks.
         """
+
         if self.pre_conv:
             x = self.conv0(x)
+
         x = x + embeddings[:, : x.shape[1], :, :]
 
         out = self.conv1(x)
@@ -240,26 +235,29 @@ class UNet(nn.Module):
     def __init__(self, in_channels, out_channels, num_filters=32):
         super(UNet, self).__init__()
 
-        max_filters_nbr = num_filters * 8 + num_filters * 4
+        self.max_filters_nbr = num_filters * 8 + num_filters * 4
         self.entry_conv = nn.Conv2d(in_channels, num_filters, 3, 1, 1)
         self.down1 = DownBlock(num_filters, num_filters)
-        self.down2 = DownBlock(num_filters, num_filters * 2, attention=True)
+        self.down2 = DownBlock(num_filters, num_filters * 2, attention=False)
         self.down3 = DownBlock(num_filters * 2, num_filters * 4)
         self.bottleneck1 = ResidualConvBlock(num_filters * 4, num_filters * 8)
         self.bottleneck2 = ResidualConvBlock(num_filters * 8, num_filters * 8)
         self.up3 = UpBlock(num_filters * 8 + num_filters * 4, num_filters * 4)
         self.up2 = UpBlock(
-            num_filters * 4 + num_filters * 2, num_filters * 2, attention=True
+            num_filters * 4 + num_filters * 2, num_filters * 2, attention=False
         )
         self.up1 = UpBlock(num_filters * 2 + num_filters, num_filters)
         self.out = nn.Conv2d(num_filters, out_channels, 1)
-        self.sigmoid = nn.Sigmoid()
-
-        self.time_embedder = SinusoidalEmbeddings(1000, max_filters_nbr)
+        self.time_embedder = timestep_embedding
 
     def forward(self, x, t):
         x = self.entry_conv(x)
-        embeds = self.time_embedder(x, t)
+        embeds = (
+            self.time_embedder(t, self.max_filters_nbr)
+            .unsqueeze(2)
+            .unsqueeze(3)
+            .to(x.device)
+        )
         x, skip1 = self.down1(x, embeds)
         x, skip2 = self.down2(x, embeds)
         x, skip3 = self.down3(x, embeds)
@@ -268,6 +266,6 @@ class UNet(nn.Module):
         x = self.up3(x, skip3, embeds)
         x = self.up2(x, skip2, embeds)
         x = self.up1(x, skip1, embeds)
+        x = F.silu(x)
         x = self.out(x)
-        x = self.sigmoid(x)
         return x
