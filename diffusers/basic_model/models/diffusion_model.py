@@ -14,8 +14,6 @@ from ..schedulers import (
     linear_diffusion_scheduler,
 )
 
-generator = torch.manual_seed(0)
-
 
 class DiffusionModel(pl.LightningModule):
     def __init__(self, in_channels, out_channels, num_filters, num_steps, lr=1e-3):
@@ -34,14 +32,12 @@ class DiffusionModel(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         x = batch["image"].to(self.device)
         t = torch.randint(0, self.num_steps, (x.shape[0],))
-        noise = torch.randn(x.shape, generator=generator, requires_grad=False).to(
-            x.device
-        )
+        noise = torch.randn(x.shape, requires_grad=False).to(x.device)
 
         alpha = self.alphas[t].reshape(x.shape[0], 1, 1, 1).to(x.device)
         beta = self.betas[t].reshape(x.shape[0], 1, 1, 1).to(x.device)
         noisy_image = alpha * x + beta * noise
-        pred_noises = self.unet(noisy_image, t)
+        pred_noises = self.unet(noisy_image, t / self.num_steps)
         loss = self.criterion(pred_noises, noise)
         self.log("train_loss", loss, prog_bar=True)
         return loss
@@ -56,7 +52,10 @@ class DiffusionModel(pl.LightningModule):
             alpha = alphas[step].repeat(num_images).reshape(num_images, 1, 1, 1)
             beta = betas[step].repeat(num_images).reshape(num_images, 1, 1, 1)
             with torch.no_grad():
-                t = torch.full((num_images,), step, device=self.device)
+                t = (
+                    torch.full((num_images,), step, device=self.device)
+                    / diffusion_steps
+                )
                 self.ema.eval()
                 pred_noise = self.ema(current_images, t)
 
