@@ -2,7 +2,6 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision.transforms import v2 as transforms
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import LearningRateFinder
 from PIL import Image
 from datasets import load_dataset
 from diffusers.basic_model.models.diffusion_model import DiffusionModel
@@ -54,21 +53,23 @@ class CenterCrop(torch.nn.Module):
         return f"{self.__class__.__name__}(size={self.size})"
 
 
-model = DiffusionModel(in_channels=3, out_channels=3, num_filters=64, num_steps=1000)
+model = DiffusionModel(
+    in_channels=3, out_channels=3, num_filters=32, num_steps=1000, lr=1e-3
+)
 model = model.to("mps")
 
 img_callback = DiffusionImageLogger(num_images=4, every_n_epochs=1)
 
-trainer = pl.Trainer(max_epochs=50, callbacks=[img_callback])
+trainer = pl.Trainer(max_epochs=100, callbacks=[img_callback])
 
-dataset = load_dataset("nelorth/oxford-flowers")
+dataset = load_dataset("huggan/flowers-102-categories")
 
 train_dataset = dataset["train"]
 
 transfrom = transforms.Compose(
     [
         CenterCrop(),
-        transforms.Resize((64, 64), Image.BICUBIC),
+        transforms.Resize((64, 64), Image.LANCZOS),
         transforms.RandomHorizontalFlip(),
         transforms.ToImage(),
         transforms.ToDtype(torch.float32, scale=True),

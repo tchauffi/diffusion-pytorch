@@ -16,13 +16,13 @@ from ..schedulers import (
 
 
 class DiffusionModel(pl.LightningModule):
-    def __init__(self, in_channels, out_channels, num_filters, num_steps, lr=1e-3):
+    def __init__(self, in_channels, out_channels, num_filters, num_steps, lr=5e-3):
         super().__init__()
         self.unet = UNet(in_channels, out_channels, num_filters)
         self.num_steps = num_steps
 
-        steps = torch.arange(num_steps, dtype=torch.float32) / num_steps
-        self.alphas, self.betas = offset_cosine_diffusion_scheduler(steps)
+        steps = torch.arange(num_steps, dtype=torch.float32)
+        self.alphas, self.betas = offset_cosine_diffusion_scheduler(steps / num_steps)
         self.criterion = torch.nn.L1Loss(reduction="mean")
         self.ema = ModelEmaV3(self.unet, decay=0.999)
 
@@ -36,7 +36,7 @@ class DiffusionModel(pl.LightningModule):
 
         alpha = self.alphas[t].reshape(x.shape[0], 1, 1, 1).to(x.device)
         beta = self.betas[t].reshape(x.shape[0], 1, 1, 1).to(x.device)
-        noisy_image = alpha * x + beta * noise
+        noisy_image = beta * x + alpha * noise
         pred_noises = self.unet(noisy_image, t / self.num_steps)
         loss = self.criterion(pred_noises, noise)
         self.log("train_loss", loss, prog_bar=True)
@@ -59,7 +59,7 @@ class DiffusionModel(pl.LightningModule):
                 self.ema.eval()
                 pred_noise = self.ema(current_images, t)
 
-                pred_image = (current_images - pred_noise * beta) / alpha
+                pred_image = (current_images - pred_noise * alpha) / beta
 
                 alpha_minus_one = (
                     alphas[step - 1].repeat(num_images).reshape(num_images, 1, 1, 1)
@@ -69,13 +69,13 @@ class DiffusionModel(pl.LightningModule):
                 )
 
                 current_images = (
-                    alpha_minus_one * pred_image + beta_minus_one * pred_noise
+                    beta_minus_one * pred_image + alpha_minus_one * pred_noise
                 )
 
         return pred_image
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=1e-4)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=1e-6)
         return optimizer
 
     def optimizer_step(self, *args, **kwargs):

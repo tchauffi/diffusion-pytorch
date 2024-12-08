@@ -1,16 +1,16 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
+import math
 
 
-def timestep_embedding(timesteps, dim, max_period=10000):
+def timestep_embedding(timesteps, dim, max_period=1000.0):
     """
     Generate sinusoidal embeddings for the given timesteps.
     """
     half_dim = dim // 2
     frequencies = torch.exp(
-        -torch.log(torch.tensor(max_period, dtype=torch.float32))
+        torch.log(torch.tensor(max_period, dtype=torch.float32))
         * torch.arange(start=0, end=half_dim, dtype=torch.float32)
         / half_dim
     ).to(timesteps.device)
@@ -23,33 +23,27 @@ def timestep_embedding(timesteps, dim, max_period=10000):
     return embeddings
 
 
-class Attention(nn.Module):
-    """
-    This module performs multi-head scaled dot-product attention.
-    """
-
-    def __init__(self, C: int, num_heads: int, dropout_prob: float):
+class AttentionBlock(nn.Module):
+    def __init__(self, channels, num_heads=1):
         super().__init__()
-        self.proj1 = nn.Linear(C, C * 3)
-        self.proj2 = nn.Linear(C, C)
         self.num_heads = num_heads
-        self.dropout_prob = dropout_prob
+        assert channels % num_heads == 0
+
+        self.norm = nn.BatchNorm2d(channels)
+        self.qkv = nn.Conv2d(channels, channels * 3, kernel_size=1, bias=False)
+        self.proj = nn.Conv2d(channels, channels, kernel_size=1)
 
     def forward(self, x):
-        """
-        Forward pass of the attention module.
-        """
-        h, w = x.shape[2:]
-        x = rearrange(x, "b c h w -> b (h w) c")
-        x = self.proj1(x)
-        x = rearrange(x, "b L (C H K) -> K b H L C", K=3, H=self.num_heads)
-        q, k, v = x[0], x[1], x[2]
-        x = F.scaled_dot_product_attention(
-            q, k, v, is_causal=False, dropout_p=self.dropout_prob
-        )
-        x = rearrange(x, "b H (h w) C -> b h w (C H)", h=h, w=w)
-        x = self.proj2(x)
-        return rearrange(x, "b h w C -> b C h w")
+        B, C, H, W = x.shape
+        qkv = self.qkv(self.norm(x))
+        q, k, v = qkv.reshape(B * self.num_heads, -1, H * W).chunk(3, dim=1)
+        scale = 1.0 / math.sqrt(math.sqrt(C // self.num_heads))
+        attn = torch.einsum("bct,bcs->bts", q * scale, k * scale)
+        attn = attn.softmax(dim=-1)
+        h = torch.einsum("bts,bcs->bct", attn, v)
+        h = h.reshape(B, -1, H, W)
+        h = self.proj(h)
+        return h + x
 
 
 class ResidualConvBlock(nn.Module):
@@ -95,9 +89,9 @@ class ResidualConvBlock(nn.Module):
             )
         self.conv1 = nn.Conv2d(out_channels, out_channels, kernel_size, stride, padding)
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size, stride, padding)
-        self.bn1 = nn.GroupNorm(32, out_channels)
-        self.bn2 = nn.GroupNorm(32, out_channels)
-        self.silu = F.silu
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.silu = nn.SiLU()
         self.dropout = nn.Dropout(0.1)
 
     def forward(self, x, embeddings):
@@ -156,7 +150,7 @@ class DownBlock(nn.Module):
         self.conv2 = ResidualConvBlock(out_channels, out_channels)
         self.downsample = nn.MaxPool2d(2)
         if attention:
-            self.attention = Attention(out_channels, num_heads=8, dropout_prob=0.1)
+            self.attention = AttentionBlock(out_channels, num_heads=4)
 
     def forward(self, x, embeddings):
         x = self.conv1(x, embeddings)
@@ -195,7 +189,7 @@ class UpBlock(nn.Module):
         self.conv2 = ResidualConvBlock(out_channels, out_channels)
         self.out_channels = out_channels
         if attention:
-            self.attention = Attention(out_channels, num_heads=8, dropout_prob=0.1)
+            self.attention = AttentionBlock(out_channels, num_heads=4)
 
     def forward(self, x, skip, embeddings):
         x = self.upsample(x)
@@ -238,15 +232,16 @@ class UNet(nn.Module):
         self.max_filters_nbr = num_filters * 8 + num_filters * 4
         self.entry_conv = nn.Conv2d(in_channels, num_filters, 3, 1, 1)
         self.down1 = DownBlock(num_filters, num_filters)
-        self.down2 = DownBlock(num_filters, num_filters * 2, attention=False)
+        self.down2 = DownBlock(num_filters, num_filters * 2, attention=True)
         self.down3 = DownBlock(num_filters * 2, num_filters * 4)
         self.bottleneck1 = ResidualConvBlock(num_filters * 4, num_filters * 8)
         self.bottleneck2 = ResidualConvBlock(num_filters * 8, num_filters * 8)
         self.up3 = UpBlock(num_filters * 8 + num_filters * 4, num_filters * 4)
         self.up2 = UpBlock(
-            num_filters * 4 + num_filters * 2, num_filters * 2, attention=False
+            num_filters * 4 + num_filters * 2, num_filters * 2, attention=True
         )
         self.up1 = UpBlock(num_filters * 2 + num_filters, num_filters)
+        self.end_norm = nn.GroupNorm(num_filters, num_filters)
         self.out = nn.Conv2d(num_filters, out_channels, 1)
         self.time_embedder = timestep_embedding
 
@@ -266,6 +261,7 @@ class UNet(nn.Module):
         x = self.up3(x, skip3, embeds)
         x = self.up2(x, skip2, embeds)
         x = self.up1(x, skip1, embeds)
+        x = self.end_norm(x)
         x = F.silu(x)
         x = self.out(x)
         return x
