@@ -1,14 +1,9 @@
 import pytorch_lightning as pl
 import torch
-import torchvision
 from pytorch_lightning.callbacks import Callback
-from pytorch_lightning.loggers import TensorBoardLogger
 from einops import rearrange
-from tqdm import tqdm
 
 import numpy as np
-
-generator = torch.manual_seed(0)
 
 
 class DiffusionImageLogger(Callback):
@@ -17,9 +12,7 @@ class DiffusionImageLogger(Callback):
         self.every_n_epochs = every_n_epochs
         self.nb_steps = nb_steps
 
-        self.input_noise = torch.randn(
-            self.num_images, 3, 64, 64, requires_grad=False, generator=generator
-        )
+        self.input_noise = torch.randn(self.num_images, 3, 64, 64, requires_grad=False)
 
     def on_train_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
         if trainer.current_epoch % self.every_n_epochs == 0:
