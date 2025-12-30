@@ -56,12 +56,11 @@ class CenterCrop(torch.nn.Module):
 model = DiffusionModel(
     in_channels=3, out_channels=3, num_filters=32, num_steps=1000, lr=1e-3
 )
-model = model.to("mps")
+model = model.to("cuda")
 
 img_callback = DiffusionImageLogger(num_images=4, every_n_epochs=1)
 
-trainer = pl.Trainer(max_epochs=100, callbacks=[img_callback])
-
+trainer = pl.Trainer(max_epochs=100, callbacks=[img_callback], precision="16-mixed")
 dataset = load_dataset("huggan/flowers-102-categories")
 
 train_dataset = dataset["train"]
@@ -85,6 +84,6 @@ def transforms_fn(examples):
 
 train_dataset.set_transform(transforms_fn)
 
-train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=7, pin_memory=True, drop_last=True)
 
 trainer.fit(model, train_loader)
