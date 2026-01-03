@@ -20,7 +20,7 @@ _model_cache = {}
 
 def load_latent_diffusion_model(vae_checkpoint: str, ldm_checkpoint: str, device: str = "cpu", num_classes: int = None):
     """Load the Latent Diffusion Model with pretrained VAE and UNet."""
-    from diffusers.vae.vae import VAE
+    from diffusers.vae.model import VAE
     from diffusers.latent_diffusion.latent_diffusion import LatentDiffusionModel, LatentUNet
     
     cache_key = f"{vae_checkpoint}_{ldm_checkpoint}_{num_classes}"
