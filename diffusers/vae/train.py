@@ -6,7 +6,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from PIL import Image
 from datasets import load_dataset
-from diffusers.vae.vae import VAE, VAEModel
+from diffusers.vae.model import VAE, VAEModel
 
 from torchvision.transforms import functional as F
 import torchvision
