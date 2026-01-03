@@ -16,7 +16,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from PIL import Image
 from datasets import load_dataset
 
-from diffusers.vae.vae import VAE
+from diffusers.vae.model import VAE
 from diffusers.latent_diffusion.latent_diffusion import LatentDiffusionModel
 
 torch.manual_seed(42)

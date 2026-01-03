@@ -38,7 +38,7 @@ try:
 except ImportError:
     XFORMERS_AVAILABLE = False
 
-from ..vae.vae import VAE
+from ..vae.model import VAE
 from ..basic_model.schedulers import offset_cosine_diffusion_scheduler
 
 
@@ -285,6 +285,7 @@ class LatentUNet(nn.Module):
         x = self.conv_out(x)
         
         return x
+
 
 
 class LatentDiffusionModel(pl.LightningModule):
@@ -661,7 +662,23 @@ class LatentDiffusionModel(pl.LightningModule):
 
         snr = (alpha / sigma) ** 2
         return snr
+    
+    @classmethod
+    def from_pretrained(cls, vae: VAE, unet_checkpoint: str):
+        """Load a LatentDiffusionModel from pretrained UNet weights."""
+        import json
+        from safetensors.torch import load_file
 
+        config_path = unet_checkpoint.replace('.safetensors', '.json')
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+        model = cls(
+            vae=vae,
+            **config
+        )
+        model.unet.load_state_dict(load_file(unet_checkpoint))
+        return model
+        
 if __name__ == "__main__":
     # Test the latent diffusion model
     print("Testing Latent Diffusion Model...")
