@@ -585,6 +585,25 @@ class VAE(nn.Module):
         recon_x = self.decode(z)
         return recon_x, mu, logvar
     
+    @classmethod
+    def from_pretrained(cls, checkpoint_path: str):
+        import json
+        from safetensors.torch import load_file
+        from pathlib import Path
+
+        # Load config
+        config_path = Path(checkpoint_path).with_suffix('.json')
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+        vae = cls(**config)
+        # Load weights
+        if checkpoint_path.endswith('.safetensors'):
+            state_dict = load_file(checkpoint_path)
+        else:
+            raise ValueError("Only .safetensors checkpoints are supported.")
+        vae.load_state_dict(state_dict)
+        return vae
+
 class VAEModel(pl.LightningModule):
     """VAE training module with improved loss functions.
     
