@@ -25,7 +25,7 @@ poetry run python train.py
 
 To generate images using a trained diffusion model, run the Gradio app:
 ```bash
-poetry run python app.py
+poetry run python app_latent_diffusion.py
 ```
 
 The app will be accessible at `http://localhost:7860`. You can specify the number of images to generate, the number of diffusion steps, and the path to the trained model checkpoint.
