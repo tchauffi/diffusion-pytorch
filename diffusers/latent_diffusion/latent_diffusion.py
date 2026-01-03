@@ -21,7 +21,20 @@ from timm.utils import ModelEmaV3
 
 try:
     from xformers.ops import memory_efficient_attention
-    XFORMERS_AVAILABLE = True
+    # Check if xformers CUDA kernels are actually usable
+    # They may be installed but not support the current GPU
+    import xformers
+    if hasattr(xformers, '_has_cpp_library') and not xformers._has_cpp_library:
+        XFORMERS_AVAILABLE = False
+    else:
+        # Try a small test to verify it works
+        try:
+            _test = torch.randn(1, 1, 1, 16, device='cuda' if torch.cuda.is_available() else 'cpu')
+            memory_efficient_attention(_test, _test, _test)
+            XFORMERS_AVAILABLE = True
+        except (NotImplementedError, RuntimeError):
+            XFORMERS_AVAILABLE = False
+            print("xformers installed but not supported on this GPU, using PyTorch SDPA")
 except ImportError:
     XFORMERS_AVAILABLE = False
 
@@ -108,9 +121,9 @@ class AttentionBlock(nn.Module):
             out = out.permute(0, 2, 3, 1).reshape(b, c, h, w)
         else:
             # PyTorch SDPA expects (B, H, N, D) format
-            q = q.permute(0, 1, 3, 2)  # (B, heads, H*W, dim)
-            k = k.permute(0, 1, 3, 2)
-            v = v.permute(0, 1, 3, 2)
+            q = q.permute(0, 1, 3, 2).contiguous()  # (B, heads, H*W, dim)
+            k = k.permute(0, 1, 3, 2).contiguous()
+            v = v.permute(0, 1, 3, 2).contiguous()
             out = F.scaled_dot_product_attention(q, k, v)
             out = out.permute(0, 1, 3, 2).reshape(b, c, h, w)
         
