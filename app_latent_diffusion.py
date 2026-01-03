@@ -21,90 +21,17 @@ _model_cache = {}
 def load_latent_diffusion_model(vae_checkpoint: str, ldm_checkpoint: str, device: str = "cpu", num_classes: int = None):
     """Load the Latent Diffusion Model with pretrained VAE and UNet."""
     from diffusers.vae.model import VAE
-    from diffusers.latent_diffusion.latent_diffusion import LatentDiffusionModel, LatentUNet
+    from diffusers.latent_diffusion.latent_diffusion import LatentDiffusionModel
     
     cache_key = f"{vae_checkpoint}_{ldm_checkpoint}_{num_classes}"
     if cache_key in _model_cache:
         return _model_cache[cache_key]
     
     # VAE configuration (should match your trained VAE)
-    vae = VAE(
-        latent_dim=4,
-        base_channels=64,
-        channel_multipliers=(1, 2, 2, 4),
-        num_res_blocks=2,
-        attention_resolutions=(16,),
-        dropout=0.0,
-        input_resolution=128
-    )
-    
-    # Load VAE weights
-    if Path(vae_checkpoint).exists():
-        checkpoint = torch.load(vae_checkpoint, map_location=device, weights_only=False)
-        if 'vae_state_dict' in checkpoint:
-            vae.load_state_dict(checkpoint['vae_state_dict'])
-            print(f"Loaded VAE from EMA checkpoint: {vae_checkpoint}")
-        elif 'state_dict' in checkpoint:
-            # Lightning checkpoint format
-            state_dict = {k.replace('vae.', ''): v for k, v in checkpoint['state_dict'].items() 
-                          if k.startswith('vae.')}
-            if state_dict:
-                vae.load_state_dict(state_dict)
-            print(f"Loaded VAE from Lightning checkpoint: {vae_checkpoint}")
-        else:
-            vae.load_state_dict(checkpoint)
-            print(f"Loaded VAE state dict: {vae_checkpoint}")
-    else:
-        print(f"WARNING: VAE checkpoint not found: {vae_checkpoint}")
-    
-    # Load LDM checkpoint to get config
-    ldm_config = {
-        'latent_channels': 4,
-        'base_channels': 256,
-        'channel_multipliers': (1, 2, 2, 4),
-        'num_steps': 1000,
-        'num_classes': None
-    }
-    
-    ldm_checkpoint_data = None
-    if Path(ldm_checkpoint).exists():
-        ldm_checkpoint_data = torch.load(ldm_checkpoint, map_location=device, weights_only=False)
-        if 'config' in ldm_checkpoint_data:
-            ldm_config.update(ldm_checkpoint_data['config'])
-            print(f"Loaded config from checkpoint: {ldm_config}")
-    
-    # Override num_classes if provided
-    if num_classes is not None and num_classes > 0:
-        ldm_config['num_classes'] = num_classes
-    
-    # Create LDM with config from checkpoint
-    model = LatentDiffusionModel(
-        vae=vae,
-        latent_channels=ldm_config['latent_channels'],
-        base_channels=ldm_config['base_channels'],
-        channel_multipliers=ldm_config['channel_multipliers'],
-        num_steps=ldm_config['num_steps'],
-        use_ema=False,  # Will load EMA weights directly
-        num_classes=ldm_config['num_classes']
-    )
-    
-    # Load LDM/UNet weights
-    if ldm_checkpoint_data is not None:
-        if 'ema_state_dict' in ldm_checkpoint_data and ldm_checkpoint_data['ema_state_dict'] is not None:
-            model.unet.load_state_dict(ldm_checkpoint_data['ema_state_dict'])
-            print(f"Loaded UNet from EMA weights: {ldm_checkpoint}")
-        elif 'unet_state_dict' in ldm_checkpoint_data:
-            model.unet.load_state_dict(ldm_checkpoint_data['unet_state_dict'])
-            print(f"Loaded UNet weights: {ldm_checkpoint}")
-        elif 'state_dict' in ldm_checkpoint_data:
-            # Lightning checkpoint format
-            state_dict = {k.replace('unet.', ''): v for k, v in ldm_checkpoint_data['state_dict'].items() 
-                          if k.startswith('unet.')}
-            if state_dict:
-                model.unet.load_state_dict(state_dict)
-            print(f"Loaded UNet from Lightning checkpoint: {ldm_checkpoint}")
-    else:
-        print(f"WARNING: LDM checkpoint not found: {ldm_checkpoint}")
+    vae = VAE.from_pretrained(vae_checkpoint)
+    vae.eval()
+
+    model = LatentDiffusionModel.from_pretrained(vae, ldm_checkpoint)
     
     model.eval()
     model = model.to(device)
@@ -124,8 +51,8 @@ def generate_images(
 ):
     """Generate images using the Latent Diffusion Model."""
     # Hardcoded paths
-    vae_checkpoint = "data/cat_model/vae-ema-final.pt"
-    ldm_checkpoint = "data/cat_model/ldm-final.pt"
+    vae_checkpoint = "data/latent_diffusion_model/vae/vae-ema-final.safetensors"
+    ldm_checkpoint = "data/latent_diffusion_model/unet/ldm-final.safetensors"
     
     # Map class names to labels (3 = null/unconditional class)
     class_map = {"🐱 Cat": 0, "🐕 Dog": 1, "🦁 Wild": 2, "🎲 Random": 3}
