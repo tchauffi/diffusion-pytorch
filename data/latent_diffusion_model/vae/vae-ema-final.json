@@ -1,0 +1,10 @@
+{
+    "latent_dim": 4,
+    "input_resolution": 128,
+    "base_channels":64,
+    "channel_multipliers": [1, 2, 2, 4],
+    "num_res_blocks":2,
+    "attention_resolutions" : [16],
+    "dropout" : 0.0
+
+}
