@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { DiffusionInference } from '@/lib/diffusion-onnx';
+import { makeAssetPath } from '@/lib/asset-path';
 
 // Class options for the model
 const CLASS_OPTIONS = [
@@ -11,6 +12,8 @@ const CLASS_OPTIONS = [
 ];
 
 export default function Home() {
+  const resolveModelPath = (relative: string) => makeAssetPath(relative);
+
   const [model, setModel] = useState<DiffusionInference | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingProgress, setLoadingProgress] = useState(0);
@@ -45,8 +48,8 @@ export default function Home() {
         setLoadingProgress(20);
         
         await diffusion.loadModels(
-          '/models/unet.onnx',
-          '/models/vae-decoder.onnx',
+          resolveModelPath('/models/unet.onnx'),
+          resolveModelPath('/models/vae-decoder.onnx'),
           (message) => {
             setLoadingStatus(message);
             if (message.includes('UNet')) setLoadingProgress(40);

@@ -3,13 +3,12 @@
  * Uses offset cosine schedule matching the Python training code
  */
 import * as ort from 'onnxruntime-web';
+import { makeAssetPath } from './asset-path';
 
 // Configure ONNX Runtime (client-side only)
 if (typeof window !== 'undefined') {
-  const basePath = (process.env.NEXT_PUBLIC_BASE_PATH || '').replace(/\/$/, '');
-  const rawPath = `${basePath}/wasm/`;
-  const normalizedPath = rawPath.replace(/\/\/{2,}/g, '/');
-  ort.env.wasm.wasmPaths = normalizedPath || '/wasm/';
+  const wasmPath = makeAssetPath('wasm/');
+  ort.env.wasm.wasmPaths = wasmPath || '/wasm/';
 
   const supportsSharedArrayBuffer = typeof window.SharedArrayBuffer !== 'undefined' && window.crossOriginIsolated;
   if (supportsSharedArrayBuffer) {
