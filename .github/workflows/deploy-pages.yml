@@ -21,37 +21,36 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          lfs: true
+          lfs: false
 
-      # ===== Free up disk space =====
-      - name: Free disk space
+      # ===== Fetch pre-exported ONNX models =====
+      - name: Download ONNX models from Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO_ID: ${{ vars.HF_REPO_ID }}
+          HF_BRANCH: ${{ vars.HF_BRANCH }}
         run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          df -h
-
-      # ===== Setup Python for ONNX Export =====
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install Python Dependencies (CPU-only)
-        run: |
-          pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install --no-cache-dir safetensors onnx onnxscript pytorch-lightning timm einops torchmetrics
-
-      - name: Export Models to ONNX
-        run: |
-          python export_onnx.py
-      
-      - name: Clean up Python packages
-        run: |
-          pip uninstall -y torch torchvision
-          rm -rf ~/.cache/pip
-          df -h
+          set -euo pipefail
+          if [ -z "${HF_REPO_ID:-}" ]; then
+            echo "HF_REPO_ID variable is not set. Define a repository-level variable named HF_REPO_ID (e.g., username/diffusion-onnx)." >&2
+            exit 1
+          fi
+          BRANCH="${HF_BRANCH:-main}"
+          TARGET_DIR="webapp/frontend/public/models"
+          mkdir -p "${TARGET_DIR}"
+          BASE_URL="https://huggingface.co/${HF_REPO_ID}/resolve/${BRANCH}/models"
+          download_file() {
+            local filename="$1"
+            local url="${BASE_URL}/${filename}"
+            echo "Downloading ${filename} from ${url}"
+            if [ -n "${HF_TOKEN:-}" ]; then
+              curl -sSL -H "Authorization: Bearer ${HF_TOKEN}" "${url}" -o "${TARGET_DIR}/${filename}"
+            else
+              curl -sSL "${url}" -o "${TARGET_DIR}/${filename}"
+            fi
+          }
+          download_file vae-decoder.onnx
+          download_file unet.onnx
 
       # ===== Next.js Build =====
       - name: Setup Node

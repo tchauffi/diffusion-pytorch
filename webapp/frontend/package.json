@@ -3,10 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "sync-models": "node scripts/sync-models.js",
+    "predev": "npm run sync-models",
     "dev": "next dev",
+    "prebuild": "npm run sync-models",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "preexport": "npm run sync-models",
     "export": "next build"
   },
   "dependencies": {
