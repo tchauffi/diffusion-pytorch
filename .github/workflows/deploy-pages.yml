@@ -23,19 +23,35 @@ jobs:
         with:
           lfs: true
 
+      # ===== Free up disk space =====
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h
+
       # ===== Setup Python for ONNX Export =====
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install Python Dependencies
+      - name: Install Python Dependencies (CPU-only)
         run: |
-          pip install torch torchvision safetensors onnx
+          pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install --no-cache-dir safetensors onnx
 
       - name: Export Models to ONNX
         run: |
           python export_onnx.py
+      
+      - name: Clean up Python packages
+        run: |
+          pip uninstall -y torch torchvision
+          rm -rf ~/.cache/pip
+          df -h
 
       # ===== Next.js Build =====
       - name: Setup Node
