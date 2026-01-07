@@ -23,6 +23,9 @@ wheels/
 share/python-wheels/
 *.egg-info/
 .installed.cfg
+
+# Don't ignore webapp lib folder
+!webapp/frontend/lib/
 *.egg
 MANIFEST
 
