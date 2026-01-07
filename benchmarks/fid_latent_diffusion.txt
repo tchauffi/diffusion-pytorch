@@ -1,0 +1,18 @@
+Latent Diffusion Model - FID Evaluation Results
+================================================================================
+
+VAE Checkpoint: data/latent_diffusion_model/vae/vae-ema-final.safetensors
+LDM Checkpoint: data/latent_diffusion_model/unet/ldm-final.safetensors
+Samples per class: 500
+Real samples per class: 500
+DDIM steps: 50
+CFG scale: 3.0
+Evaluation runs: 5
+
+Results:
+--------------------------------------------------------------------------------
+  Cat       : FID =    40.97 ±   0.67
+  Dog       : FID =    69.74 ±   1.95
+  Wild      : FID =    40.71 ±   1.21
+
+  Overall   : FID =    33.90 ±   0.61
