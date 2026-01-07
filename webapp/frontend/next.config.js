@@ -1,4 +1,6 @@
 /** @type {import('next').NextConfig} */
+const path = require('path');
+
 const nextConfig = {
   output: 'export',
   // Change this to your repo name for GitHub Pages
@@ -15,12 +17,35 @@ const nextConfig = {
     
     // Fix for WASM in client-side
     if (!isServer) {
+      // Force webpack to use browser field in package.json
+      config.resolve.mainFields = ['browser', 'module', 'main'];
+      
       config.resolve.fallback = {
         ...config.resolve.fallback,
         fs: false,
         path: false,
+        crypto: false,
+        stream: false,
+        module: false,
+      };
+      
+      // Exclude onnxruntime-node completely
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        'onnxruntime-node': false,
       };
     }
+    
+    // Disable critical warnings for dynamic requires
+    config.module = {
+      ...config.module,
+      exprContextCritical: false,
+      unknownContextCritical: false,
+    };
+    
+    config.ignoreWarnings = [
+      { module: /node_modules\/onnxruntime-web/ },
+    ];
     
     return config;
   },

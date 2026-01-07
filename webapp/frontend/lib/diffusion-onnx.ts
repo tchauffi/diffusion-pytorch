@@ -6,6 +6,8 @@ import * as ort from 'onnxruntime-web';
 
 // Configure ONNX Runtime (client-side only)
 if (typeof window !== 'undefined') {
+  // Set WASM paths to public folder
+  ort.env.wasm.wasmPaths = '/wasm/';
   // Enable WebGPU if available
   ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
   ort.env.wasm.simd = true;
@@ -75,7 +77,9 @@ export class DiffusionInference {
         executionProviders,
         graphOptimizationLevel: 'all',
       });
-      onProgress?.(`UNet loaded (using ${this.unetSession.handler?.['_ep'] || 'unknown'} backend)`);
+      // @ts-expect-error handler property may not exist in all onnxruntime-web versions
+      const backend = this.unetSession.handler?.['_ep'] || 'WASM';
+      onProgress?.(`UNet loaded (using ${backend} backend)`);
     } catch (e) {
       console.warn('WebGPU not available, falling back to WASM', e);
       this.unetSession = await ort.InferenceSession.create(unetPath, {
