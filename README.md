@@ -36,6 +36,31 @@ poetry run python app_latent_diffusion.py
 
 The app will be accessible at `http://localhost:7860`. You can specify the number of images to generate, the number of diffusion steps, and the path to the trained model checkpoint.
 
+## Model Evaluation
+
+### FID Scores
+
+The latent diffusion model was evaluated using the Fréchet Inception Distance (FID) metric on the AFHQ dataset:
+
+| Class | FID Score |
+|-------|-----------|
+| Cat   | 40.97 ± 0.67 |
+| Dog   | 69.74 ± 1.95 |
+| Wild  | 40.71 ± 1.21 |
+| **Overall** | **33.90 ± 0.61** |
+
+**Evaluation Settings:**
+- 500 generated samples per class
+- 500 real samples per class
+- 50 DDIM sampling steps
+- Classifier-free guidance scale: 3.0
+- 5 evaluation runs with different random seeds
+
+To reproduce the evaluation:
+```bash
+poetry run python scripts/evaluate_fid.py --samples_per_class 500 --num_steps 50 --num_runs 5
+```
+
 ## Web Application
 
 The project includes a browser-based image generation app built with Next.js and ONNX Runtime WebAssembly.
