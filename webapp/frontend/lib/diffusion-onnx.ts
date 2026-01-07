@@ -6,11 +6,20 @@ import * as ort from 'onnxruntime-web';
 
 // Configure ONNX Runtime (client-side only)
 if (typeof window !== 'undefined') {
-  // Set WASM paths to public folder
-  ort.env.wasm.wasmPaths = '/wasm/';
-  // Enable WebGPU if available
-  ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
-  ort.env.wasm.simd = true;
+  const basePath = (process.env.NEXT_PUBLIC_BASE_PATH || '').replace(/\/$/, '');
+  const rawPath = `${basePath}/wasm/`;
+  const normalizedPath = rawPath.replace(/\/\/{2,}/g, '/');
+  ort.env.wasm.wasmPaths = normalizedPath || '/wasm/';
+
+  const supportsSharedArrayBuffer = typeof window.SharedArrayBuffer !== 'undefined' && window.crossOriginIsolated;
+  if (supportsSharedArrayBuffer) {
+    ort.env.wasm.numThreads = Math.min(4, navigator.hardwareConcurrency || 1);
+    ort.env.wasm.simd = true;
+  } else {
+    ort.env.wasm.numThreads = 1;
+    ort.env.wasm.simd = false;
+    ort.env.wasm.proxy = false;
+  }
 }
 
 export interface DiffusionConfig {

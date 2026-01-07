@@ -6,6 +6,8 @@ const MODELS = ['unet.onnx', 'vae-decoder.onnx'];
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const localModelDir = path.resolve(repoRoot, 'data', 'models_onnx');
 const publicModelDir = path.resolve(__dirname, '..', 'public', 'models');
+const publicWasmDir = path.resolve(__dirname, '..', 'public', 'wasm');
+const ortDistDir = path.resolve(__dirname, '..', 'node_modules', 'onnxruntime-web', 'dist');
 const baseUrl = process.env.HF_MODELS_BASE_URL || process.env.NEXT_PUBLIC_MODELS_BASE_URL;
 const hfRepoId = process.env.HF_REPO_ID;
 const hfBranch = process.env.HF_BRANCH || 'main';
@@ -15,6 +17,32 @@ function ensureDir(dirPath) {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
   }
+}
+
+function copyOrtWasmAssets() {
+  if (!fs.existsSync(ortDistDir)) {
+    console.warn('onnxruntime-web dist folder not found. Skipping WASM copy.');
+    return;
+  }
+
+  ensureDir(publicWasmDir);
+  const desiredFiles = new Set();
+  const distFiles = fs.readdirSync(ortDistDir);
+  distFiles.forEach((file) => {
+    if (file.startsWith('ort-wasm') && (file.endsWith('.wasm') || file.endsWith('.js'))) {
+      desiredFiles.add(file);
+    }
+  });
+  desiredFiles.add('ort-wasm-worker.js');
+
+  desiredFiles.forEach((file) => {
+    const source = path.join(ortDistDir, file);
+    if (fs.existsSync(source)) {
+      const target = path.join(publicWasmDir, file);
+      fs.copyFileSync(source, target);
+      console.log(`Copied ${file} to /public/wasm`);
+    }
+  });
 }
 
 function copyLocalModel(filename) {
@@ -86,6 +114,7 @@ async function ensureModel(filename) {
 (async () => {
   try {
     ensureDir(publicModelDir);
+    copyOrtWasmAssets();
     for (const model of MODELS) {
       // eslint-disable-next-line no-await-in-loop
       await ensureModel(model);
