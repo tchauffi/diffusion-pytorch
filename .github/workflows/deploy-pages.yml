@@ -75,6 +75,9 @@ jobs:
         env:
           NEXT_PUBLIC_BASE_PATH: /${{ steps.repo.outputs.name }}
 
+      - name: Add .nojekyll file
+        run: touch ./webapp/frontend/out/.nojekyll
+
       # ===== Deploy =====
       - name: Setup Pages
         uses: actions/configure-pages@v5
