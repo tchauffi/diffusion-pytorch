@@ -41,7 +41,7 @@ jobs:
       - name: Install Python Dependencies (CPU-only)
         run: |
           pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install --no-cache-dir safetensors onnx pytorch-lightning timm einops torchmetrics
+          pip install --no-cache-dir safetensors onnx onnxscript pytorch-lightning timm einops torchmetrics
 
       - name: Export Models to ONNX
         run: |
