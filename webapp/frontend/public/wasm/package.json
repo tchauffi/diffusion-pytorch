@@ -1,0 +1,17 @@
+{
+  "name": "diffusion-wasm",
+  "type": "module",
+  "description": "Latent Diffusion Model inference in WebAssembly using Candle",
+  "version": "0.1.0",
+  "license": "MIT",
+  "files": [
+    "diffusion_wasm_bg.wasm",
+    "diffusion_wasm.js",
+    "diffusion_wasm.d.ts"
+  ],
+  "main": "diffusion_wasm.js",
+  "types": "diffusion_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
