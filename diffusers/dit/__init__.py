@@ -1,0 +1,1 @@
+"""This module implement the Diffusion Image Transformer (DiT) model from scratch."""
