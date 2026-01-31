@@ -64,6 +64,15 @@ To reproduce the evaluation:
 poetry run python scripts/evaluate_fid.py --samples_per_class 500 --num_steps 50 --num_runs 5
 ```
 
+### Flow Matching Model FID Scores
+
+| Class | FID Score |
+|-------|-----------|
+| Cat   | 40.80 ± 0.94 |
+| Dog   | 75.38 ± 0.79 |
+| Wild  | 39.39 ± 2.09 |
+| **Overall** | **34.44 ± 0.61** |
+
 ## Web Application
 
 The project includes a browser-based image generation app built with Next.js and ONNX Runtime WebAssembly.
