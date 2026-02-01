@@ -265,15 +265,18 @@ class FlowLatentDiffusionModel(pl.LightningModule):
         # We integrate backwards: t goes from 1 -> 0
         timesteps = torch.linspace(1.0, 0.0, num_inference_steps + 1, device=self.device)
         
-        # Helper function to compute velocity with optional CFG
+        # Helper function to compute velocity with optional CFG (batched for efficiency)
         def get_velocity(z_t, t_scalar):
             t_batch = torch.full((num_samples,), t_scalar, device=self.device, dtype=torch.float32)
             
             if use_cfg:
-                # Conditional prediction
-                v_cond = model(z_t, t_batch, class_labels)
-                # Unconditional prediction
-                v_uncond = model(z_t, t_batch, null_labels)
+                # Batch conditional and unconditional together for single forward pass
+                z_in = torch.cat([z_t, z_t], dim=0)
+                t_in = torch.cat([t_batch, t_batch], dim=0)
+                labels_in = torch.cat([class_labels, null_labels], dim=0)
+                
+                v_both = model(z_in, t_in, labels_in)
+                v_cond, v_uncond = v_both.chunk(2, dim=0)
                 # CFG: v = v_uncond + cfg_scale * (v_cond - v_uncond)
                 v = v_uncond + cfg_scale * (v_cond - v_uncond)
             else:
