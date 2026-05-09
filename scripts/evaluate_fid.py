@@ -133,7 +133,8 @@ def get_real_images(class_id: int, num_samples: int, device='cpu'):
 @torch.no_grad()
 def generate_samples(model, class_id: int, num_samples: int, 
                      num_steps: int, cfg_scale: float, batch_size: int, device='cpu',
-                     sampler: str = "euler", model_type: str = "flow"):
+                     sampler: str = "euler", model_type: str = "flow",
+                     use_cfg_zero: bool = False):
     """Generate samples using the appropriate sampling method.
     
     Args:
@@ -146,9 +147,13 @@ def generate_samples(model, class_id: int, num_samples: int,
         device: Device to use
         sampler: "euler", "heun" (for flow) or "ddim" (for noise)
         model_type: "flow" or "noise"
+        use_cfg_zero: Use CFG-Zero (rescaled CFG) to prevent oversaturation
     """
     model.eval()
     all_images = []
+    
+    # Check if model supports class conditioning
+    is_conditional = getattr(model, 'num_classes', None) is not None
     
     num_batches = (num_samples + batch_size - 1) // batch_size
     
@@ -159,14 +164,21 @@ def generate_samples(model, class_id: int, num_samples: int,
         latent_shape = (LATENT_CHANNELS, 16, 16)
         z = torch.randn(current_batch_size, *latent_shape, device=device)
         
-        # Prepare class labels for CFG
-        class_labels = torch.full((current_batch_size,), class_id, device=device, dtype=torch.long)
-        null_labels = torch.full((current_batch_size,), NUM_CLASSES, device=device, dtype=torch.long)
+        # Prepare class labels for CFG (only if model is conditional)
+        if is_conditional:
+            class_labels = torch.full((current_batch_size,), class_id, device=device, dtype=torch.long)
+            null_labels = torch.full((current_batch_size,), NUM_CLASSES, device=device, dtype=torch.long)
+        else:
+            class_labels = None
+            null_labels = None
+            # CFG is not applicable for unconditional models
+            cfg_scale = 1.0
         
         if model_type == "flow":
             # Flow matching: Euler or Heun ODE integration
             z = _flow_matching_sample(model, z, num_steps, cfg_scale, 
-                                       class_labels, null_labels, device, sampler)
+                                       class_labels, null_labels, device, sampler,
+                                       use_cfg_zero=use_cfg_zero)
         else:
             # Noise prediction: DDIM sampling
             z = _ddim_sample(model, z, num_steps, cfg_scale,
@@ -185,10 +197,16 @@ def generate_samples(model, class_id: int, num_samples: int,
     return torch.cat(all_images, dim=0)
 
 
-def _flow_matching_sample(model, z, num_steps, cfg_scale, class_labels, null_labels, device, sampler):
-    """Flow matching sampling with Euler or Heun integration."""
+def _flow_matching_sample(model, z, num_steps, cfg_scale, class_labels, null_labels, device, sampler,
+                          use_cfg_zero: bool = False):
+    """Flow matching sampling with Euler or Heun integration.
+    
+    Args:
+        use_cfg_zero: If True, rescale CFG output to match conditional velocity norm.
+                      This prevents oversaturation at high CFG scales.
+    """
     current_batch_size = z.shape[0]
-    use_cfg = cfg_scale > 1.0
+    use_cfg = cfg_scale > 1.0 and class_labels is not None
     
     # Time steps from t=1 (noise) to t=0 (data)
     timesteps = torch.linspace(1.0, 0.0, num_steps + 1, device=device)
@@ -205,8 +223,26 @@ def _flow_matching_sample(model, z, num_steps, cfg_scale, class_labels, null_lab
             
             v_both = model.unet(z_in, t_in, labels_in)
             v_cond, v_uncond = v_both.chunk(2, dim=0)
-            return v_uncond + cfg_scale * (v_cond - v_uncond)
+            
+            # Standard CFG
+            v = v_uncond + cfg_scale * (v_cond - v_uncond)
+            
+            if use_cfg_zero:
+                # CFG-Zero: Rescale to match the norm of the conditional prediction
+                # This prevents oversaturation by keeping the velocity magnitude bounded
+                # Flatten spatial dims for norm computation, then reshape back
+                v_cond_flat = v_cond.flatten(start_dim=1)
+                v_flat = v.flatten(start_dim=1)
+                v_cond_norm = torch.linalg.vector_norm(v_cond_flat, dim=1, keepdim=True)
+                v_norm = torch.linalg.vector_norm(v_flat, dim=1, keepdim=True)
+                # Reshape norms to broadcast: (B, 1) -> (B, 1, 1, 1)
+                v_cond_norm = v_cond_norm.view(-1, 1, 1, 1)
+                v_norm = v_norm.view(-1, 1, 1, 1)
+                v = v * v_cond_norm / (v_norm + 1e-8)
+            
+            return v
         else:
+            # Unconditional model or no CFG
             return model.unet(z_t, t_batch, class_labels)
     
     if sampler == "euler":
@@ -239,6 +275,7 @@ def _ddim_sample(model, z, num_steps, cfg_scale, class_labels, null_labels, devi
     """DDIM sampling for noise prediction models."""
     current_batch_size = z.shape[0]
     num_training_steps = 1000
+    use_cfg = cfg_scale > 1.0 and class_labels is not None
     
     # Create timestep schedule
     step_ratio = num_training_steps / num_steps
@@ -263,7 +300,7 @@ def _ddim_sample(model, z, num_steps, cfg_scale, class_labels, null_labels, devi
         beta_t = all_betas[t].view(1, 1, 1, 1)
         
         # CFG: predict with and without conditioning
-        if cfg_scale > 1.0:
+        if use_cfg:
             z_in = torch.cat([z, z], dim=0)
             t_in = torch.cat([t_input, t_input], dim=0)
             labels_in = torch.cat([class_labels, null_labels], dim=0)
@@ -273,6 +310,7 @@ def _ddim_sample(model, z, num_steps, cfg_scale, class_labels, null_labels, devi
             noise_pred_cond, noise_pred_uncond = noise_pred.chunk(2, dim=0)
             noise_pred = noise_pred_uncond + cfg_scale * (noise_pred_cond - noise_pred_uncond)
         else:
+            # Unconditional model or no CFG
             noise_pred = model.unet(z, t_input / num_training_steps, class_labels)
         
         # DDIM: predict clean latent
@@ -350,6 +388,8 @@ def main():
                         help="Number of evaluation runs for computing std (default: 1, no std)")
     parser.add_argument("--output", type=str, default="fid_results.txt",
                         help="Output file for results")
+    parser.add_argument("--cfg_zero", action="store_true",
+                        help="Use CFG-Zero (rescaled CFG) to prevent oversaturation at high CFG scales")
     
     args = parser.parse_args()
     
@@ -370,6 +410,7 @@ def main():
     print(f"Sampling steps: {args.num_steps}")
     print(f"Sampler: {args.sampler}")
     print(f"CFG scale: {args.cfg_scale}")
+    print(f"CFG-Zero: {args.cfg_zero}")
     print(f"Evaluation runs: {args.num_runs}")
     print("-" * 80)
     
@@ -411,7 +452,7 @@ def main():
             fake_images = generate_samples(
                 model, class_id, args.samples_per_class,
                 args.num_steps, args.cfg_scale, args.batch_size, args.device,
-                args.sampler, args.model_type
+                args.sampler, args.model_type, args.cfg_zero
             )
             print(f"✓ Generated {len(fake_images)} fake images")
             
