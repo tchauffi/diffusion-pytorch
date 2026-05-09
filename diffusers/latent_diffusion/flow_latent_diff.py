@@ -47,7 +47,12 @@ class FlowLatentDiffusionModel(pl.LightningModule):
         use_ema: bool = True,
         ema_decay: float = 0.9999,
         num_classes: int = None,
-        cfg_dropout_prob: float = 0.1
+        cfg_dropout_prob: float = 0.1,
+        use_logit_normal_sampling: bool = True,  # Bias timestep sampling toward t=0.5
+        logit_normal_mean: float = 0.0,  # Mean of logit-normal distribution
+        logit_normal_std: float = 1.0,   # Std of logit-normal distribution  
+        use_snr_weighting: bool = True,  # Weight loss by signal-to-noise ratio
+        min_snr_gamma: float = 5.0,      # Min-SNR-gamma clamping value
     ):
         super().__init__()
         self.save_hyperparameters(ignore=['vae'])
@@ -87,6 +92,13 @@ class FlowLatentDiffusionModel(pl.LightningModule):
         # Your VAE produces latents with std ~2.6, so we scale by 1/std ≈ 0.38
         # This helps the flow model as it expects inputs close to unit variance
         self.scale_factor = 0.38  # Adjusted for your VAE (was 0.18215 for SD)
+        
+        # Rectified Flow enhancements
+        self.use_logit_normal_sampling = use_logit_normal_sampling
+        self.logit_normal_mean = logit_normal_mean
+        self.logit_normal_std = logit_normal_std
+        self.use_snr_weighting = use_snr_weighting
+        self.min_snr_gamma = min_snr_gamma
     
     def on_fit_start(self):
         """Initialize EMA when training starts."""
@@ -110,14 +122,58 @@ class FlowLatentDiffusionModel(pl.LightningModule):
         z = z / self.scale_factor
         return self.vae.decode(z)
     
+    def _sample_timesteps(self, batch_size: int) -> torch.Tensor:
+        """Sample timesteps using logit-normal distribution (SD3/Flux style).
+        
+        Logit-normal sampling concentrates samples around t=0.5 where the
+        learning signal is strongest. This improves training efficiency.
+        
+        The distribution is: t = sigmoid(mean + std * N(0,1))
+        """
+        if self.use_logit_normal_sampling:
+            # Sample from standard normal, then transform
+            u = torch.randn(batch_size, device=self.device)
+            u = self.logit_normal_mean + self.logit_normal_std * u
+            t = torch.sigmoid(u)
+            # Clamp to avoid numerical issues at boundaries
+            t = torch.clamp(t, 1e-5, 1.0 - 1e-5)
+        else:
+            # Uniform sampling (original)
+            t = torch.rand(batch_size, device=self.device)
+        return t
+    
+    def _compute_snr_weights(self, t: torch.Tensor) -> torch.Tensor:
+        """Compute min-SNR loss weighting (from 'Efficient Diffusion Training' paper).
+        
+        For rectified flow with linear interpolation z_t = (1-t)*z_0 + t*z_1:
+        - Signal coefficient: (1-t)
+        - Noise coefficient: t
+        - SNR = (1-t)^2 / t^2
+        
+        Min-SNR-gamma weighting: weight = min(SNR, gamma) / SNR
+        This prevents loss explosion at high noise levels (t→1) while
+        maintaining signal at low noise levels (t→0).
+        """
+        # Avoid division by zero
+        t_clamped = torch.clamp(t, 1e-5, 1.0 - 1e-5)
+        
+        # SNR for rectified flow
+        snr = ((1 - t_clamped) / t_clamped) ** 2
+        
+        # Min-SNR-gamma weighting
+        weights = torch.clamp(snr, max=self.min_snr_gamma) / snr
+        
+        return weights
+    
     def training_step(self, batch, batch_idx):
         x = batch["image"]
         
         # Encode to latent space (z_0 = data)
         z_0 = self.encode(x)
         
-        # Sample random timesteps t ∈ [0, 1]
-        t = torch.rand(z_0.shape[0], device=self.device)
+        # Sample timesteps using logit-normal distribution (SD3 style)
+        # This biases sampling toward t=0.5 where learning is most effective
+        t = self._sample_timesteps(z_0.shape[0])
 
         # Get class labels if available
         c = batch.get("label", None)
@@ -143,8 +199,15 @@ class FlowLatentDiffusionModel(pl.LightningModule):
         # Model predicts the velocity
         v_pred = self.unet(z_t, t, c)
         
-        # MSE loss on velocity prediction
-        loss = self.criterion(v_pred, v_target)
+        # Compute per-sample MSE loss
+        mse_per_sample = ((v_pred - v_target) ** 2).mean(dim=(1, 2, 3))
+        
+        # Apply min-SNR weighting if enabled
+        if self.use_snr_weighting:
+            snr_weights = self._compute_snr_weights(t)
+            loss = (snr_weights * mse_per_sample).mean()
+        else:
+            loss = mse_per_sample.mean()
         
         self.log("train_loss", loss, prog_bar=True)
         return loss
@@ -223,7 +286,8 @@ class FlowLatentDiffusionModel(pl.LightningModule):
     
     @torch.no_grad()
     def sample(self, num_samples, latent_shape, num_inference_steps=None,
-               class_labels=None, cfg_scale=1.0, sampler="euler"):
+               class_labels=None, cfg_scale=1.0, sampler="euler", 
+               use_cfg_zero: bool = False):
         """Generate samples using Flow Matching ODE integration.
         
         Flow Matching samples by integrating the ODE:
@@ -237,6 +301,7 @@ class FlowLatentDiffusionModel(pl.LightningModule):
             class_labels: Class labels for conditional generation
             cfg_scale: Classifier-free guidance scale (>1.0 for stronger conditioning)
             sampler: Integration method - "euler" or "heun"
+            use_cfg_zero: Use CFG-Zero (rescaled CFG) to prevent oversaturation
             
         Returns:
             Generated images in pixel space
@@ -277,8 +342,24 @@ class FlowLatentDiffusionModel(pl.LightningModule):
                 
                 v_both = model(z_in, t_in, labels_in)
                 v_cond, v_uncond = v_both.chunk(2, dim=0)
-                # CFG: v = v_uncond + cfg_scale * (v_cond - v_uncond)
+                
+                # Standard CFG: v = v_uncond + cfg_scale * (v_cond - v_uncond)
                 v = v_uncond + cfg_scale * (v_cond - v_uncond)
+                
+                if use_cfg_zero:
+                    # CFG-Zero: Rescale to match the norm of the conditional prediction
+                    # This prevents oversaturation by keeping the velocity magnitude bounded
+                    # v_rescaled = v * ||v_cond|| / ||v||
+                    # Flatten spatial dims for norm computation
+                    v_cond_flat = v_cond.flatten(start_dim=1)
+                    v_flat = v.flatten(start_dim=1)
+                    v_cond_norm = torch.linalg.vector_norm(v_cond_flat, dim=1, keepdim=True)
+                    v_norm = torch.linalg.vector_norm(v_flat, dim=1, keepdim=True)
+                    # Reshape norms to broadcast: (B, 1) -> (B, 1, 1, 1)
+                    v_cond_norm = v_cond_norm.view(-1, 1, 1, 1)
+                    v_norm = v_norm.view(-1, 1, 1, 1)
+                    # Avoid division by zero
+                    v = v * v_cond_norm / (v_norm + 1e-8)
             else:
                 c = class_labels if (class_labels is not None and self.num_classes is not None) else None
                 v = model(z_t, t_batch, c)
